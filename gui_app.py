@@ -30,6 +30,8 @@ MODE_LABELS = {
     "Add new version only": MODE_ADD_ONLY,
 }
 
+APP_ICON_FILE = "QAM-Logo-1-2048x1310whiteBGRND.png"
+
 
 class RosterSyncApp(tk.Tk):
     def __init__(self) -> None:
@@ -38,6 +40,7 @@ class RosterSyncApp(tk.Tk):
         self.geometry("920x700")
         self.minsize(820, 620)
         self._set_theme()
+        self._set_window_icon()
 
         now = datetime.now()
         self.docx_var = tk.StringVar()
@@ -64,6 +67,17 @@ class RosterSyncApp(tk.Tk):
             style.theme_use("vista")
         elif "clam" in style.theme_names():
             style.theme_use("clam")
+
+    def _set_window_icon(self) -> None:
+        icon_path = Path(__file__).resolve().parent / APP_ICON_FILE
+        if not icon_path.exists():
+            return
+        try:
+            self._icon_image = tk.PhotoImage(file=str(icon_path))
+            self.iconphoto(True, self._icon_image)
+        except tk.TclError:
+            # Keep GUI startup resilient if icon loading fails in a given Tk build.
+            pass
 
     def _build_ui(self) -> None:
         frame = ttk.Frame(self, padding=14)
