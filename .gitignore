@@ -18,6 +18,16 @@ __pycache__/
 *.tmp
 *.bak
 
+# Local secrets and auth tokens
+token.json
+credentials.json
+*.apps.googleusercontent.com.json
+modules/credentials.json
+modules/client_secret_*.json
+*.env
+.env
+.env.*
+
 # IDE settings
 .vscode/
 .idea/

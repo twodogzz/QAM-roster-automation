@@ -1,0 +1,13 @@
+NewProjectWizard
+2026-03-08 12:11am
+
+SYNC COMPLETE
+
+Press any key to exit...
+New-Project : Project creation failed: Method invocation failed because [System.Management.Automation.PSObject] does
+not contain a method named 'op_Addition'.
+At E:\SoftwareProjects\_ecosystem\NewProjectWizard\Start-NewProjectWizard.ps1:23 char:1
++ New-Project
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,New-Project
