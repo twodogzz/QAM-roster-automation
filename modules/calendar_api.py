@@ -9,6 +9,7 @@ from typing import Any, cast
 
 try:
     from google.auth.credentials import Credentials as GoogleCredentials
+    from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials as OAuthUserCredentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -142,8 +143,18 @@ def _load_credentials() -> GoogleCredentials:
         return creds
 
     if creds and creds.expired and getattr(creds, "refresh_token", None):
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            if not _should_force_reauth(exc):
+                raise
+            LOGGER.warning("OAuth refresh failed (%s). Re-authenticating with a new browser login.", exc)
+            _delete_stale_token(token_path)
+            creds = None
     else:
+        creds = None
+
+    if creds is None or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)
         creds = cast(GoogleCredentials, flow.run_local_server(port=0))
 
@@ -201,3 +212,21 @@ def _resolve_client_secret_path(project_root: Path) -> Path:
         "Create modules/credentials.json (recommended), "
         "or set QAM_GOOGLE_CLIENT_SECRET_PATH to your local client secret JSON file."
     )
+
+
+def _should_force_reauth(exc: RefreshError) -> bool:
+    text = str(exc).lower()
+    return (
+        "invalid_client" in text
+        or "invalid_grant" in text
+        or "unauthorized" in text
+    )
+
+
+def _delete_stale_token(token_path: Path) -> None:
+    try:
+        if token_path.exists():
+            token_path.unlink()
+            LOGGER.info("Removed stale OAuth token file: %s", token_path)
+    except OSError as exc:
+        LOGGER.warning("Could not remove stale OAuth token file %s: %s", token_path, exc)
