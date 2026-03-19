@@ -240,9 +240,16 @@ def configure_logging() -> None:
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
+    handlers: list[logging.Handler] = [file_handler]
+
+    # Windowed builds may not have a live stderr stream. Keep file logging enabled
+    # and only attach console logging when a writable stream exists.
+    if sys.stderr is not None and hasattr(sys.stderr, "write"):
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        handlers.append(stream_handler)
+
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
     LOGGER.info("Logging configured at %s", log_file)
 
 
