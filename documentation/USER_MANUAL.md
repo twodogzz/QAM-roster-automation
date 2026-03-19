@@ -299,3 +299,35 @@ Before release:
 3. Run full sync against a test calendar
 4. Validate delete-month-all safety on non-production data
 5. Review `logs/creation.log` for unexpected warnings
+
+## 11. Building Windows Executable (PyInstaller)
+
+This project includes a Windows batch file to build a single-file executable.
+
+### 11.1 Prerequisites
+
+```bash
+python -m pip install pyinstaller
+```
+
+### 11.2 Build Command (Batch File)
+
+Run the batch file from the project root:
+
+```bash
+scripts\pyinstaller_command.bat
+```
+
+You can also double-click `scripts\pyinstaller_command.bat` in File Explorer.
+
+The batch file uses `python -m PyInstaller`, so PyInstaller does not need to be on PATH (but it must be installed in the active Python environment).
+
+### 11.3 Output Details
+
+The build outputs are written into the `scripts` folder:
+
+- `scripts\qamRoster.exe` (the Windows 10/11 executable)
+- `scripts\qamRoster.spec` (PyInstaller spec file)
+- `scripts\build\` (temporary build artifacts)
+
+If you want a different executable name, edit `scripts\pyinstaller_command.bat` and change the `--name` value.
