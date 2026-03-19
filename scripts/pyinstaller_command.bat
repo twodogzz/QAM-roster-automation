@@ -12,11 +12,8 @@ set "PYTHONHOME="
 set "PYTHONPATH="
 
 pushd "%PROJECT_ROOT%"
-"%PY_EXE%" -m PyInstaller --onefile --name "qamRoster" --distpath "%SCRIPT_DIR%" --workpath "%SCRIPT_DIR%\build" --specpath "%SCRIPT_DIR%" ^
-  --add-data "%PROJECT_ROOT%\modules\credentials.json;modules" ^
-  --add-data "%PROJECT_ROOT%\project.json;." ^
-  --add-data "%PROJECT_ROOT%\QAM-Logo-1-2048x1310whiteBGRND.png;." ^
-  "%PROJECT_ROOT%\main.py"
+"%PY_EXE%" -m PyInstaller --clean --distpath "%SCRIPT_DIR%" --workpath "%SCRIPT_DIR%\build" ^
+  "%PROJECT_ROOT%\qamRoster.spec"
 popd
 
 endlocal

@@ -1,11 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+project_root = Path(__file__).resolve().parent
+
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=[str(project_root)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(project_root / 'modules' / 'credentials.json'), 'modules'),
+        (str(project_root / 'project.json'), '.'),
+        (str(project_root / 'QAM-Logo-1-2048x1310whiteBGRND.png'), '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
