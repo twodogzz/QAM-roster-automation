@@ -5,11 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+import os
 import re
 from typing import Any
 
 from modules import calendar_api
-from modules.roster_parser import MONTH_SHORT, parse_roster_docx, to_google_event_payload
+from modules.roster_parser import (
+    MONTH_SHORT,
+    RosterEvent,
+    RosterParseResult,
+    build_all_workers_events,
+    parse_roster_docx,
+    to_google_event_payload,
+)
 
 
 VERSION_PATTERN = re.compile(r"\bv(\d+)\b", re.IGNORECASE)
@@ -20,6 +28,9 @@ MODE_ADD_ONLY = "add_only"
 MODE_DELETE_CURRENT = "delete_current"
 MODE_DELETE_MONTH_ALL = "delete_month_all"
 VALID_MODES = {MODE_FULL, MODE_DELETE_ONLY, MODE_ADD_ONLY, MODE_DELETE_CURRENT, MODE_DELETE_MONTH_ALL}
+
+DEFAULT_ALL_WORKERS_TITLE = "QAM Front Counter Roster"
+ALL_WORKERS_CALENDAR_ENV = "QAM_ALL_WORKERS_CALENDAR_ID"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,11 +48,16 @@ class SyncOptions:
     volunteer_name: str = "Wayne Freestun"
     event_title: str = "Wayne volunteer Queensland Air Museum"
     location: str = "Queensland Air Museum"
+    sync_all_workers: bool = False
+    all_workers_calendar_id: str | None = None
+    all_workers_event_title: str = DEFAULT_ALL_WORKERS_TITLE
 
 
 @dataclass(frozen=True)
 class SyncPlan:
+    plan_name: str
     options: SyncOptions
+    calendar_id: str
     summary_prefix: str
     roster_month: int
     roster_year: int
@@ -53,16 +69,41 @@ class SyncPlan:
 
 
 @dataclass(frozen=True)
+class AutomationPlan:
+    options: SyncOptions
+    primary_plan: SyncPlan
+    all_workers_plan: SyncPlan | None = None
+
+
+@dataclass(frozen=True)
 class SyncResult:
     deleted_count: int
     created_count: int
 
 
-def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
+@dataclass(frozen=True)
+class AutomationResult:
+    primary_result: SyncResult
+    all_workers_result: SyncResult | None = None
+
+    @property
+    def deleted_count(self) -> int:
+        total = self.primary_result.deleted_count
+        if self.all_workers_result:
+            total += self.all_workers_result.deleted_count
+        return total
+
+    @property
+    def created_count(self) -> int:
+        total = self.primary_result.created_count
+        if self.all_workers_result:
+            total += self.all_workers_result.created_count
+        return total
+
+
+def prepare_sync_plan(options: SyncOptions) -> AutomationPlan:
     if options.mode not in VALID_MODES:
         raise ValueError(f"Invalid mode '{options.mode}'. Expected one of: {sorted(VALID_MODES)}")
-
-    calendar_api.set_calendar_id(options.calendar_id)
 
     parsed = None
     if options.mode != MODE_DELETE_MONTH_ALL:
@@ -74,28 +115,114 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
             event_title=options.event_title,
             location=options.location,
         )
-        roster_month = parsed.month
-        roster_year = parsed.year
-        covered_months = parsed.covered_months
-        version = parsed.version
-        summary_prefix = parsed.summary_prefix
-    else:
-        if not options.month or not options.year:
-            raise ValueError("Month and year are required for 'delete all versions in chosen month'.")
-        roster_month = options.month
-        roster_year = options.year
-        covered_months = [(options.year, options.month)]
-        version = None
-        summary_prefix = f"{options.event_title} - {MONTH_SHORT[roster_month - 1]}"
 
+    primary_plan = _prepare_single_sync_plan(
+        options,
+        plan_name="Wayne Calendar",
+        calendar_id=options.calendar_id,
+        parsed=parsed,
+        events=parsed.roster_events if parsed else None,
+        summary_prefix=parsed.summary_prefix if parsed else None,
+        roster_month=parsed.month if parsed else options.month,
+        roster_year=parsed.year if parsed else options.year,
+        covered_months=parsed.covered_months if parsed else None,
+        version=parsed.version if parsed else None,
+    )
+
+    all_workers_plan = None
+    if options.sync_all_workers:
+        if options.mode == MODE_DELETE_MONTH_ALL:
+            raise ValueError("All workers sync requires a DOCX-backed mode; it is not available with delete_month_all.")
+        if parsed is None:
+            raise ValueError("All workers sync requires a parsed DOCX roster.")
+
+        all_workers_calendar_id = resolve_all_workers_calendar_id(options)
+        if all_workers_calendar_id == options.calendar_id:
+            raise ValueError("The all workers calendar must be different from the Wayne calendar.")
+
+        # This optional flow writes one event per roster day to a separate
+        # calendar, while the default Wayne flow only writes Wayne's shifts.
+        all_workers_events = build_all_workers_events(
+            parsed,
+            event_title=options.all_workers_event_title,
+            location=options.location,
+        )
+        all_workers_plan = _prepare_single_sync_plan(
+            options,
+            plan_name="All Workers Calendar",
+            calendar_id=all_workers_calendar_id,
+            parsed=parsed,
+            events=all_workers_events,
+            summary_prefix=f"{options.all_workers_event_title} - {MONTH_SHORT[parsed.month - 1]}",
+            roster_month=parsed.month,
+            roster_year=parsed.year,
+            covered_months=parsed.covered_months,
+            version=parsed.version,
+        )
+
+    return AutomationPlan(options=options, primary_plan=primary_plan, all_workers_plan=all_workers_plan)
+
+
+def execute_sync_plan(plan: AutomationPlan) -> AutomationResult:
+    primary_result = _execute_single_sync_plan(plan.primary_plan)
+    all_workers_result = None
+    if plan.all_workers_plan is not None:
+        all_workers_result = _execute_single_sync_plan(plan.all_workers_plan)
+    return AutomationResult(primary_result=primary_result, all_workers_result=all_workers_result)
+
+
+def summarize_plan(plan: AutomationPlan) -> str:
+    sections = [_summarize_single_plan(plan.primary_plan)]
+    if plan.all_workers_plan is not None:
+        sections.append("")
+        sections.append(_summarize_single_plan(plan.all_workers_plan))
+    return "\n".join(sections)
+
+
+def resolve_all_workers_calendar_id(options: SyncOptions) -> str:
+    if options.all_workers_calendar_id:
+        return options.all_workers_calendar_id
+
+    env_calendar = os.getenv(ALL_WORKERS_CALENDAR_ENV, "").strip()
+    if env_calendar:
+        return env_calendar
+
+    raise ValueError(
+        "All workers sync was requested but no separate calendar was configured. "
+        f"Provide all_workers_calendar_id or set {ALL_WORKERS_CALENDAR_ENV}."
+    )
+
+
+def _prepare_single_sync_plan(
+    options: SyncOptions,
+    *,
+    plan_name: str,
+    calendar_id: str,
+    parsed: RosterParseResult | None,
+    events: list[RosterEvent] | None,
+    summary_prefix: str | None,
+    roster_month: int | None,
+    roster_year: int | None,
+    covered_months: list[tuple[int, int]] | None,
+    version: str | None,
+) -> SyncPlan:
+    if summary_prefix is None or roster_month is None or roster_year is None:
+        raise ValueError("Sync plan is missing roster metadata.")
+
+    if covered_months is None:
+        covered_months = [(roster_year, roster_month)]
+
+    calendar_api.set_calendar_id(calendar_id)
     existing = calendar_api.list_events(summary_prefix)
     scoped_events = [event for event in existing if _matches_any_month_year(event, covered_months)]
 
     LOGGER.info(
-        "Prepared sync scope for roster %02d/%04d covering %s",
+        "Prepared %s scope for roster %02d/%04d covering %s on calendar %s",
+        plan_name,
         roster_month,
         roster_year,
         ", ".join(f"{month:02d}/{year}" for year, month in covered_months),
+        calendar_id,
     )
     LOGGER.info("Found %d matching existing events, %d inside scope", len(existing), len(scoped_events))
 
@@ -122,17 +249,13 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
             delete_events.extend(_event_delete_rows(current_events))
 
     create_payloads: list[dict[str, Any]] = []
-    if options.mode in {MODE_FULL, MODE_ADD_ONLY} and parsed:
-        create_payloads = [
-            to_google_event_payload(
-                event,
-                timezone=options.timezone,
-            )
-            for event in parsed.roster_events
-        ]
+    if options.mode in {MODE_FULL, MODE_ADD_ONLY} and events:
+        create_payloads = [to_google_event_payload(event, timezone=options.timezone) for event in events]
 
     return SyncPlan(
+        plan_name=plan_name,
         options=options,
+        calendar_id=calendar_id,
         summary_prefix=summary_prefix,
         roster_month=roster_month,
         roster_year=roster_year,
@@ -144,11 +267,12 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
     )
 
 
-def execute_sync_plan(plan: SyncPlan) -> SyncResult:
+def _execute_single_sync_plan(plan: SyncPlan) -> SyncResult:
     deleted = 0
     created = 0
 
     if not plan.options.dry_run:
+        calendar_api.set_calendar_id(plan.calendar_id)
         for row in plan.delete_events:
             event_id = row.get("id")
             if not event_id:
@@ -162,15 +286,16 @@ def execute_sync_plan(plan: SyncPlan) -> SyncResult:
     return SyncResult(deleted_count=deleted, created_count=created)
 
 
-def summarize_plan(plan: SyncPlan) -> str:
+def _summarize_single_plan(plan: SyncPlan) -> str:
     roster_label = f"{plan.roster_month:02d}/{plan.roster_year}"
     if plan.version:
         roster_label = f"{roster_label} v{plan.version}"
     covered_label = ", ".join(f"{month:02d}/{year}" for year, month in plan.covered_months)
     lines = [
+        f"{plan.plan_name}:",
         f"Mode: {plan.options.mode}",
         f"Dry run: {plan.options.dry_run}",
-        f"Calendar ID: {plan.options.calendar_id}",
+        f"Calendar ID: {plan.calendar_id}",
         f"Roster label: {roster_label}",
         f"Covered months: {covered_label}",
         f"Existing matching events: {plan.existing_count}",

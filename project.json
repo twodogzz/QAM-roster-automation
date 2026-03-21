@@ -1,7 +1,7 @@
 {
     "name": "QAM-roster-automation",
     "purpose": "Create, delete, and modify Google Calendar events programmatically",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "author": "Wayne Freestun",
     "created": "2026-03-21"
   }

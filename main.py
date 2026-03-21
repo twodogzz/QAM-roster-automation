@@ -11,6 +11,8 @@ from tkinter import TclError, Tk, filedialog
 
 from modules import calendar_api
 from modules.sync_service import (
+    ALL_WORKERS_CALENDAR_ENV,
+    DEFAULT_ALL_WORKERS_TITLE,
     MODE_ADD_ONLY,
     MODE_DELETE_CURRENT,
     MODE_DELETE_MONTH_ALL,
@@ -39,6 +41,7 @@ def main() -> int:
     mode = resolve_mode(args)
     docx_file = resolve_docx_file(args, mode)
     calendar_id = resolve_calendar_id(args)
+    all_workers_calendar_id = resolve_all_workers_calendar_id(args, primary_calendar_id=calendar_id)
 
     options = SyncOptions(
         docx_file=docx_file,
@@ -52,6 +55,9 @@ def main() -> int:
         volunteer_name=args.volunteer_name,
         event_title=args.event_title,
         location=args.location,
+        sync_all_workers=args.sync_all_workers,
+        all_workers_calendar_id=all_workers_calendar_id,
+        all_workers_event_title=args.all_workers_event_title,
     )
 
     plan = prepare_sync_plan(options)
@@ -95,6 +101,26 @@ def parse_args():
     parser.add_argument("--volunteer-name", default="Wayne Freestun", help="Volunteer name to match in roster")
     parser.add_argument("--event-title", default="Wayne volunteer Queensland Air Museum", help="Event title prefix")
     parser.add_argument("--location", default="Queensland Air Museum", help="Google Calendar event location")
+    parser.add_argument(
+        "--sync-all-workers",
+        action="store_true",
+        help="Also update the separate all-workers calendar using one event per roster day",
+    )
+    parser.add_argument(
+        "--all-workers-calendar-id",
+        default=None,
+        help=f"Separate Google Calendar ID for all-workers events (fallback env: {ALL_WORKERS_CALENDAR_ENV})",
+    )
+    parser.add_argument(
+        "--select-all-workers-calendar",
+        action="store_true",
+        help="Show interactive calendar picker for the all-workers calendar",
+    )
+    parser.add_argument(
+        "--all-workers-event-title",
+        default=DEFAULT_ALL_WORKERS_TITLE,
+        help="Event title prefix for the optional all-workers calendar",
+    )
     return parser.parse_args()
 
 
@@ -116,6 +142,9 @@ def should_launch_gui(args) -> bool:
         or args.delete_month_all
         or args.add_only
         or args.dry_run
+        or args.sync_all_workers
+        or args.all_workers_calendar_id
+        or args.select_all_workers_calendar
     )
     return not has_cli_work
 
@@ -170,9 +199,35 @@ def resolve_calendar_id(args) -> str:
         return env_calendar
 
     if args.select_calendar or (not args.no_calendar_prompt and sys.stdin.isatty()):
-        return prompt_for_calendar_selection()
+        return prompt_for_calendar_selection("Select Wayne target Google Calendar:")
 
     return "primary"
+
+
+def resolve_all_workers_calendar_id(args, *, primary_calendar_id: str) -> str | None:
+    if not args.sync_all_workers:
+        return None
+
+    # The all-workers flow is optional and only runs when explicitly enabled.
+    # It always targets a separate calendar so Wayne's calendar remains unchanged
+    # unless the user asked for both flows.
+    if args.all_workers_calendar_id:
+        calendar_id = args.all_workers_calendar_id
+    else:
+        env_calendar = os.getenv(ALL_WORKERS_CALENDAR_ENV, "").strip()
+        if env_calendar:
+            calendar_id = env_calendar
+        elif args.select_all_workers_calendar or (not args.no_calendar_prompt and sys.stdin.isatty()):
+            calendar_id = prompt_for_calendar_selection("Select all-workers Google Calendar:")
+        else:
+            raise RuntimeError(
+                "All workers sync requires a separate calendar. Use --all-workers-calendar-id, "
+                f"set {ALL_WORKERS_CALENDAR_ENV}, or enable --select-all-workers-calendar."
+            )
+
+    if calendar_id == primary_calendar_id:
+        raise ValueError("The all workers calendar must be different from the Wayne calendar.")
+    return calendar_id
 
 
 def validate_docx_file(docx_path: str) -> str:
@@ -201,13 +256,13 @@ def prompt_for_docx_file() -> str | None:
         raise RuntimeError("File-picker UI is unavailable in this environment.") from exc
 
 
-def prompt_for_calendar_selection() -> str:
+def prompt_for_calendar_selection(prompt_title: str) -> str:
     calendars = calendar_api.list_calendars()
     if not calendars:
         raise RuntimeError("No calendars returned by Google Calendar API for this account.")
 
     print("")
-    print("Select target Google Calendar:")
+    print(prompt_title)
     for idx, cal in enumerate(calendars, start=1):
         summary = cal.get("summary", "<no title>")
         calendar_id = cal.get("id", "<no id>")

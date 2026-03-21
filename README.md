@@ -5,7 +5,7 @@ Create, delete, and modify Google Calendar events programmatically
 ---
 
 ## Project Metadata
-- **Version:** 0.1.2
+- **Version:** 0.1.3
 - **Created:** 2026-03-08
 - **Author:** Wayne Freestun
 
@@ -34,6 +34,7 @@ python main.py path\to\Roster_March_2026_v7.docx --dry-run
 python main.py path\to\Roster_March_2026_v7.docx --replace-current
 python main.py --gui
 python main.py --cli path\to\Roster_March_2026_v7.docx --dry-run
+python main.py --cli path\to\Roster_March_2026_v7.docx --sync-all-workers --all-workers-calendar-id your_other_calendar_id
 ```
 
 When launched on Windows with no workflow arguments, the GUI opens by default.
@@ -82,4 +83,5 @@ python main.py --no-file-picker --calendar-id your_calendar_id path\to\Roster.do
 - Use `--no-calendar-prompt` for unattended runs.
 - Multi-month rosters are supported. A roster labeled for one month can now create events in the previous, current, and next month when day cells include an explicit month name such as `1. April ...`.
 - Event summaries keep the roster month/version label so cross-month events are still traceable back to the source roster version.
+- The optional all-workers flow creates one event per roster day on a separate Google Calendar and only runs when `--sync-all-workers` is enabled in CLI or the matching checkbox is enabled in the GUI.
 

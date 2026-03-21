@@ -6,7 +6,7 @@ import unittest
 
 from docx import Document
 
-from modules.roster_parser import parse_roster_docx
+from modules.roster_parser import build_all_workers_events, parse_roster_docx
 from modules.sync_service import MODE_DELETE_CURRENT, MODE_FULL, SyncOptions, prepare_sync_plan
 
 
@@ -47,6 +47,23 @@ class MultiMonthRosterTests(unittest.TestCase):
             ["2025-12-31", "2026-01-01"],
         )
         self.assertTrue(all(event.summary.endswith("Jan v4") for event in parsed.roster_events))
+
+    def test_build_all_workers_events_creates_one_event_per_day(self) -> None:
+        docx_path = _build_roster_docx(
+            "Queensland Air Museum - Front Counter Roster March 2026 v9",
+            [
+                ["Sunday", "Monday"],
+                ["30. Someone Else", "31. Wayne Freestun"],
+            ],
+        )
+
+        parsed = parse_roster_docx(docx_path)
+        events = build_all_workers_events(parsed)
+
+        self.assertEqual([event.event_date.isoformat() for event in events], ["2026-03-30", "2026-03-31"])
+        self.assertTrue(all(event.summary.endswith("Mar v9") for event in events))
+        self.assertIn("Someone Else", events[0].description)
+        self.assertIn("Wayne Freestun", events[1].description)
 
     def test_prepare_sync_plan_scopes_deletes_across_all_parsed_months(self) -> None:
         docx_path = _build_roster_docx(
@@ -91,10 +108,53 @@ class MultiMonthRosterTests(unittest.TestCase):
             sync_service.calendar_api.list_events = original_list_events
             sync_service.calendar_api.set_calendar_id = original_set_calendar_id
 
-        self.assertEqual(plan.covered_months, [(2026, 3), (2026, 4)])
-        self.assertEqual([row["id"] for row in plan.delete_events], ["delete-old-mar", "delete-old-apr", "delete-current-mar"])
-        self.assertEqual(len(plan.create_payloads), 3)
-        self.assertEqual([row["id"] for row in delete_current_plan.delete_events], ["delete-current-mar"])
+        self.assertEqual(plan.primary_plan.covered_months, [(2026, 3), (2026, 4)])
+        self.assertEqual(
+            [row["id"] for row in plan.primary_plan.delete_events],
+            ["delete-old-mar", "delete-old-apr", "delete-current-mar"],
+        )
+        self.assertEqual(len(plan.primary_plan.create_payloads), 3)
+        self.assertEqual(
+            [row["id"] for row in delete_current_plan.primary_plan.delete_events],
+            ["delete-current-mar"],
+        )
+
+    def test_prepare_sync_plan_builds_optional_all_workers_plan(self) -> None:
+        docx_path = _build_roster_docx(
+            "Queensland Air Museum - Front Counter Roster March 2026 v9",
+            [
+                ["Sunday", "Monday"],
+                ["30. Wayne Freestun", "31. Someone Else"],
+            ],
+        )
+
+        from modules import sync_service
+
+        original_list_events = sync_service.calendar_api.list_events
+        original_set_calendar_id = sync_service.calendar_api.set_calendar_id
+        try:
+            sync_service.calendar_api.list_events = lambda query_text: []
+            sync_service.calendar_api.set_calendar_id = lambda calendar_id: None
+
+            plan = prepare_sync_plan(
+                SyncOptions(
+                    docx_file=docx_path,
+                    mode=MODE_FULL,
+                    calendar_id="wayne-calendar",
+                    sync_all_workers=True,
+                    all_workers_calendar_id="all-workers-calendar",
+                )
+            )
+        finally:
+            sync_service.calendar_api.list_events = original_list_events
+            sync_service.calendar_api.set_calendar_id = original_set_calendar_id
+
+        self.assertIsNotNone(plan.all_workers_plan)
+        assert plan.all_workers_plan is not None
+        self.assertEqual(plan.primary_plan.calendar_id, "wayne-calendar")
+        self.assertEqual(plan.all_workers_plan.calendar_id, "all-workers-calendar")
+        self.assertEqual(len(plan.primary_plan.create_payloads), 1)
+        self.assertEqual(len(plan.all_workers_plan.create_payloads), 2)
 
 
 def _build_roster_docx(title: str, rows: list[list[str]]) -> str:

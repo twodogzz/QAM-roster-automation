@@ -1,6 +1,6 @@
 # QAM Roster Automation
 
-Version: 0.1.2  
+Version: 0.1.3  
 Audience: End users and developers  
 Last updated: 2026-03-21
 
@@ -8,12 +8,11 @@ Last updated: 2026-03-21
 
 QAM Roster Automation syncs volunteer shifts from a roster `.docx` file into Google Calendar.
 
-It can:
-- Create events for rostered days
-- Delete old roster versions
-- Delete current roster version
-- Delete all roster versions for a selected month
-- Preview all changes before writing
+It supports two flows:
+- Wayne-only sync to the main calendar
+- Optional all-workers sync to a separate calendar
+
+The all-workers flow is off by default and only runs when you explicitly enable it.
 
 ## 2. System Requirements
 
@@ -21,12 +20,6 @@ It can:
 - Internet access for Google OAuth and Google Calendar API
 - Google account with calendar access
 - Local OAuth client file (`modules/credentials.json` recommended)
-
-Python dependencies:
-- `google-api-python-client`
-- `google-auth`
-- `google-auth-oauthlib`
-- `python-docx`
 
 Install:
 
@@ -46,146 +39,153 @@ copy modules\credentials.example.json modules\credentials.json
 3. Run the app once. A browser sign-in flow will open.
 4. After successful sign-in, `token.json` is created in the project root.
 
-Notes:
-- Keep `token.json` local and do not commit it.
-- If token refresh fails due to invalid credentials, the app removes stale `token.json` and re-authenticates.
+## 4. Multi-Month Roster Support
 
-## 4. Running the Application
+The parser supports roster files that include:
+- the roster month shown in the title
+- the previous month
+- the next month
 
-### 4.1 GUI Mode
+Examples:
+- `March 2026` roster with `1. April ...` creates an event on `2026-04-01`
+- `January 2026` roster with `31. December ...` creates an event on `2025-12-31`
 
-```bash
-python main.py --gui
-```
+Important:
+- Event summaries still use the roster month/version label
+- A March roster event in April still uses `... - Mar v<version>`
 
-On Windows, running `python main.py` with no workflow args opens GUI automatically.
+## 5. Date Detection Rules
 
-### 4.2 CLI Mode
+The parser keeps the logic simple:
+
+1. It reads the roster month and year from document text such as `March 2026`.
+2. A normal day cell like `17. Wayne Freestun ...` stays in the roster month.
+3. A day cell with an explicit month name like `1. April ...` uses that month instead.
+4. Explicit month names are assumed to be only the previous month, current month, or next month.
+5. The year is adjusted automatically for December/January rollovers.
+
+## 6. Wayne-Only Sync
+
+Default behavior:
+- Only Wayne-matching roster rows are turned into calendar events
+- The target calendar is the normal selected calendar
+
+CLI example:
 
 ```bash
 python main.py path\to\Roster_March_2026_v9.docx --dry-run
-python main.py path\to\Roster_March_2026_v9.docx --replace-current
-python main.py --cli path\to\Roster_March_2026_v9.docx --delete-only
-python main.py --cli --delete-month-all --month 3 --year 2026 --calendar-id your_calendar_id
-python main.py --cli path\to\Roster_March_2026_v9.docx --add-only
 ```
 
-File picker options:
+GUI example:
+- Leave `Also sync All Workers calendar` unchecked
+- Preview and then proceed as normal
+
+## 7. Optional All-Workers Sync
+
+The new all-workers flow creates:
+- one event per roster day
+- with the full worker list in the event description
+- on a separate Google Calendar
+
+It does not run automatically.
+
+### 7.1 CLI Trigger
+
+Enable it explicitly with:
 
 ```bash
-python main.py --select-file
-python main.py --no-file-picker --calendar-id your_calendar_id path\to\Roster.docx
+python main.py path\to\Roster_March_2026_v9.docx --sync-all-workers --all-workers-calendar-id your_other_calendar_id
 ```
 
-Calendar picker options:
+You can also let the app prompt for the separate calendar:
 
 ```bash
-python main.py --select-calendar path\to\Roster.docx
-python main.py --no-calendar-prompt --calendar-id your_calendar_id path\to\Roster.docx
+python main.py path\to\Roster_March_2026_v9.docx --sync-all-workers --select-all-workers-calendar
 ```
 
-## 5. Multi-Month Roster Behavior
+Environment fallback:
+- `QAM_ALL_WORKERS_CALENDAR_ID`
 
-The parser now supports roster files that include:
-- The roster month shown in the title
-- Days from the previous month
-- Days from the next month
+### 7.2 GUI Trigger
 
-Example:
-- A DOCX titled `Queensland Air Museum – Front Counter Roster March 2026 v9` may contain March shifts and also entries such as `1. April ...`, `2. April ...`, and `3. April ...`
-- Those entries are created as April calendar events, but their summary still stays tied to the roster label, for example `Wayne volunteer Queensland Air Museum - Mar v9`
+In the GUI:
+1. Select the roster DOCX
+2. Choose the normal Wayne calendar
+3. Tick `Also sync All Workers calendar`
+4. Choose a different calendar in `All Workers Calendar`
+5. Preview changes
+6. Click `Proceed`
 
-This keeps every event identifiable by the roster version it came from, even when the actual event date is in another month.
+### 7.3 Important Rules
 
-## 6. How Date Detection Works
+- The all-workers calendar must be different from the Wayne calendar
+- The all-workers flow uses the same roster parsing and multi-month logic as the Wayne flow
+- The same action mode applies to both flows
 
-The parser determines dates using a simple set of rules:
+## 8. Action Modes
 
-1. The roster month and year are read from the document content, such as `March 2026`.
-2. A normal cell like `31. Wayne Freestun ...` is treated as a day in the roster month.
-3. A cell with an explicit month name, such as `1. April ...`, is treated as that named month.
-4. Explicit month names are assumed to be only:
-   - the previous month
-   - the roster month
-   - the next month
-5. The year is adjusted automatically for January/December rollovers.
+- `full`: delete old versions, then create new events
+- `delete_only`: delete prior versions only
+- `delete_current`: delete only the current DOCX version
+- `delete_month_all`: delete all matching events in a selected month/year
+- `add_only`: create events only
 
-Examples:
-- `January 2026` roster with `31. December ...` becomes `2025-12-31`
-- `March 2026` roster with `1. April ...` becomes `2026-04-01`
+Notes:
+- `full`, `delete_only`, and `delete_current` now operate across every month found in the DOCX
+- The optional all-workers sync is not available for `delete_month_all` because that mode has no DOCX context
 
-## 7. Action Modes
+## 9. Calendar Selection
 
-- `full` (default): delete old versions in every month found in the DOCX, then create new events
-- `delete_only`: delete prior versions in every month found in the DOCX
-- `delete_current`: delete only events matching the current DOCX version across every month found in the DOCX
-- `delete_month_all`: delete all matching events in the selected month/year, no DOCX required
-- `add_only`: create events only, no deletes
+Wayne calendar priority:
+1. `--calendar-id`
+2. `QAM_CALENDAR_ID`
+3. Interactive picker
+4. `primary`
 
-`--replace-current` behavior:
-- Only affects `full` mode
-- Adds current-version events to the deletion list before recreating them
+All-workers calendar priority:
+1. `--all-workers-calendar-id`
+2. `QAM_ALL_WORKERS_CALENDAR_ID`
+3. `--select-all-workers-calendar` or interactive picker when enabled
 
-## 8. Matching and Event Labels
+## 10. Logging and Preview
 
-The parser extracts:
-- The roster month and year from document text or table cells
-- The roster version from the filename or document content
-- Volunteer shifts by finding rows containing the configured volunteer name
+Preview output now shows:
+- Wayne calendar plan
+- All-workers calendar plan, when enabled
+- covered months
+- delete/create counts
 
-Generated event summary format:
-- `<Event Title> - <RosterMon> v<version>`
-- Example: `Wayne volunteer Queensland Air Museum - Mar v9`
+Nothing is written until you proceed.
 
-Important:
-- Even if an event date is in April, an event from the March roster still uses `Mar v9`
-- Delete logic for `full`, `delete_only`, and `delete_current` now covers every month found in that DOCX, not only the roster-title month
+If `Dry run` is enabled, no calendar changes are made even after proceeding.
 
-## 9. Logging and Feedback
-
-The app now logs useful parser progress, including:
-- The detected roster month and version
-- How many day entries were found
-- Which months were covered by the DOCX
-- How many volunteer matches were found
-
-Logs are written to `logs/creation.log`.
-
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 `Unable to detect roster month/year from roster document`
-- Confirm the DOCX still includes text such as `March 2026` in a paragraph or table cell
+- Confirm the DOCX still includes text such as `March 2026`
 
 `No roster day entries were found in the DOCX table`
 - Confirm day cells still begin with a number and a period, such as `17.`
 
 `Roster cell month must be the roster month, previous month, or next month`
-- Confirm any explicit month names inside day cells only refer to the previous, current, or next month
+- Confirm explicit month labels in day cells only refer to the adjacent months
 
-`Invalid roster date`
-- Check for malformed cells such as `31. April ...`
+`All workers sync requires a separate calendar`
+- Provide `--all-workers-calendar-id`
+- or set `QAM_ALL_WORKERS_CALENDAR_ID`
+- or use `--select-all-workers-calendar`
 
-`Expected a .docx file`
-- Ensure the input file extension is `.docx`
+`The all workers calendar must be different from the Wayne calendar`
+- Choose a different calendar for the optional all-workers flow
 
-`No calendars returned by Google Calendar API for this account`
-- Confirm the authenticated Google account has at least one accessible calendar
+## 12. Developer Notes
 
-`--delete-month-all requires --month and --year`
-- Supply both numeric values and keep month in `1..12`
+Implementation shape:
+- Wayne sync remains the default path
+- All-workers sync is a second optional plan layered on top of the same DOCX parse result
+- One all-workers event is created per roster day using the full worker list
 
-## 11. Developer Notes
-
-Key parser assumptions:
-- Day rows begin with `^\s*\d{1,2}\.`
-- Explicit month names in day cells are reliable when present
-- Explicit month names only refer to the previous, current, or next month
-- Event summaries always keep the roster month label for version tracking
-
-Key parser outputs:
-- `RosterParseResult.year` and `RosterParseResult.month` still represent the roster label month
-- Each parsed event now carries its own real calendar date
-- `covered_months` lists every `(year, month)` found in the DOCX
-
-Compatibility script:
-- `qam_docx_to_ics.py` now returns per-event dates and covered months so downstream tooling can handle multi-month rosters cleanly
+Key assumptions:
+- Worker identification for Wayne remains a case-insensitive name match
+- All-workers events are day-based, not person-based
+- Explicit month names inside day cells are reliable when present

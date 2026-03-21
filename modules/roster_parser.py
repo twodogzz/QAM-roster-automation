@@ -190,6 +190,32 @@ def parse_roster_docx(
     )
 
 
+def build_all_workers_events(
+    parsed: RosterParseResult,
+    *,
+    event_title: str = "QAM Front Counter Roster",
+    location: str = "Queensland Air Museum",
+    shift_start: time = time(9, 0),
+    shift_end: time = time(16, 30),
+) -> list[RosterEvent]:
+    """Build one roster event per day using the full worker list."""
+    month_label = MONTH_SHORT[parsed.month - 1]
+    summary = f"{event_title} - {month_label} v{parsed.version}"
+    return [
+        RosterEvent(
+            event_date=assignment.event_date,
+            day=assignment.event_date.day,
+            workers_raw=assignment.workers_raw,
+            summary=summary,
+            description=f"Workers: {assignment.workers_raw} (Roster v{parsed.version})",
+            location=location,
+            start_time=shift_start,
+            end_time=shift_end,
+        )
+        for assignment in parsed.all_day_workers
+    ]
+
+
 def to_google_event_payload(event: RosterEvent, *, timezone: str) -> dict:
     start_dt = datetime.combine(event.event_date, event.start_time)
     end_dt = datetime.combine(event.event_date, event.end_time)
