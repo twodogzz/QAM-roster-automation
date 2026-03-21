@@ -5,7 +5,7 @@ Create, delete, and modify Google Calendar events programmatically
 ---
 
 ## Project Metadata
-- **Version:** 0.1.0
+- **Version:** 0.1.2
 - **Created:** 2026-03-08
 - **Author:** Wayne Freestun
 
@@ -80,4 +80,6 @@ python main.py --no-file-picker --calendar-id your_calendar_id path\to\Roster.do
   4. `primary` (only when `--no-calendar-prompt` is used or non-interactive session)
 - Use `--select-calendar` to force the picker UI.
 - Use `--no-calendar-prompt` for unattended runs.
+- Multi-month rosters are supported. A roster labeled for one month can now create events in the previous, current, and next month when day cells include an explicit month name such as `1. April ...`.
+- Event summaries keep the roster month/version label so cross-month events are still traceable back to the source roster version.
 

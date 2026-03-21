@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 import re
 from typing import Any
 
@@ -19,6 +20,8 @@ MODE_ADD_ONLY = "add_only"
 MODE_DELETE_CURRENT = "delete_current"
 MODE_DELETE_MONTH_ALL = "delete_month_all"
 VALID_MODES = {MODE_FULL, MODE_DELETE_ONLY, MODE_ADD_ONLY, MODE_DELETE_CURRENT, MODE_DELETE_MONTH_ALL}
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,8 +43,9 @@ class SyncOptions:
 class SyncPlan:
     options: SyncOptions
     summary_prefix: str
-    month: int
-    year: int
+    roster_month: int
+    roster_year: int
+    covered_months: list[tuple[int, int]]
     version: str | None
     existing_count: int
     delete_events: list[dict[str, str]]
@@ -70,40 +74,50 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
             event_title=options.event_title,
             location=options.location,
         )
-        month = parsed.month
-        year = parsed.year
+        roster_month = parsed.month
+        roster_year = parsed.year
+        covered_months = parsed.covered_months
         version = parsed.version
         summary_prefix = parsed.summary_prefix
     else:
         if not options.month or not options.year:
             raise ValueError("Month and year are required for 'delete all versions in chosen month'.")
-        month = options.month
-        year = options.year
+        roster_month = options.month
+        roster_year = options.year
+        covered_months = [(options.year, options.month)]
         version = None
-        summary_prefix = f"{options.event_title} - {MONTH_SHORT[month - 1]}"
+        summary_prefix = f"{options.event_title} - {MONTH_SHORT[roster_month - 1]}"
 
     existing = calendar_api.list_events(summary_prefix)
-    month_events = [event for event in existing if _matches_month_year(event, year, month)]
+    scoped_events = [event for event in existing if _matches_any_month_year(event, covered_months)]
+
+    LOGGER.info(
+        "Prepared sync scope for roster %02d/%04d covering %s",
+        roster_month,
+        roster_year,
+        ", ".join(f"{month:02d}/{year}" for year, month in covered_months),
+    )
+    LOGGER.info("Found %d matching existing events, %d inside scope", len(existing), len(scoped_events))
 
     delete_events: list[dict[str, str]] = []
     if options.mode == MODE_DELETE_MONTH_ALL:
-        delete_events = _event_delete_rows(month_events)
+        delete_events = _event_delete_rows(scoped_events)
     elif options.mode == MODE_DELETE_CURRENT:
         if not version:
             raise ValueError("Current version is unavailable; DOCX parse failed.")
         delete_events = _event_delete_rows(
-            [event for event in month_events if _extract_version(event.get("summary", "")) == version]
+            [event for event in scoped_events if _extract_version(event.get("summary", "")) == version]
         )
     elif options.mode in {MODE_FULL, MODE_DELETE_ONLY}:
         if not version:
             raise ValueError("Current version is unavailable; DOCX parse failed.")
         prior_events = [
-            event for event in month_events if _extract_version(event.get("summary", "")) not in {None, version}
+            event for event in scoped_events if _extract_version(event.get("summary", "")) not in {None, version}
         ]
         delete_events = _event_delete_rows(prior_events)
         if options.replace_current:
             current_events = [
-                event for event in month_events if _extract_version(event.get("summary", "")) == version
+                event for event in scoped_events if _extract_version(event.get("summary", "")) == version
             ]
             delete_events.extend(_event_delete_rows(current_events))
 
@@ -112,8 +126,6 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
         create_payloads = [
             to_google_event_payload(
                 event,
-                year=parsed.year,
-                month=parsed.month,
                 timezone=options.timezone,
             )
             for event in parsed.roster_events
@@ -122,8 +134,9 @@ def prepare_sync_plan(options: SyncOptions) -> SyncPlan:
     return SyncPlan(
         options=options,
         summary_prefix=summary_prefix,
-        month=month,
-        year=year,
+        roster_month=roster_month,
+        roster_year=roster_year,
+        covered_months=covered_months,
         version=version,
         existing_count=len(existing),
         delete_events=delete_events,
@@ -150,14 +163,16 @@ def execute_sync_plan(plan: SyncPlan) -> SyncResult:
 
 
 def summarize_plan(plan: SyncPlan) -> str:
-    roster_label = f"{plan.month:02d}/{plan.year}"
+    roster_label = f"{plan.roster_month:02d}/{plan.roster_year}"
     if plan.version:
         roster_label = f"{roster_label} v{plan.version}"
+    covered_label = ", ".join(f"{month:02d}/{year}" for year, month in plan.covered_months)
     lines = [
         f"Mode: {plan.options.mode}",
         f"Dry run: {plan.options.dry_run}",
         f"Calendar ID: {plan.options.calendar_id}",
-        f"Roster: {roster_label}",
+        f"Roster label: {roster_label}",
+        f"Covered months: {covered_label}",
         f"Existing matching events: {plan.existing_count}",
         f"Events to delete: {len(plan.delete_events)}",
         f"Events to create: {len(plan.create_payloads)}",
@@ -203,14 +218,20 @@ def _extract_version(summary: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _matches_month_year(event: dict[str, Any], year: int, month: int) -> bool:
+def _matches_any_month_year(event: dict[str, Any], covered_months: list[tuple[int, int]]) -> bool:
+    event_period = _event_month_year(event)
+    if event_period is None:
+        return False
+    return event_period in set(covered_months)
+
+
+def _event_month_year(event: dict[str, Any]) -> tuple[int, int] | None:
     start = event.get("start", {})
     raw_start = start.get("dateTime") or start.get("date")
     if not raw_start:
-        return False
+        return None
     try:
         event_dt = datetime.fromisoformat(str(raw_start).replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return event_dt.year == year and event_dt.month == month
-
+        return None
+    return event_dt.year, event_dt.month
